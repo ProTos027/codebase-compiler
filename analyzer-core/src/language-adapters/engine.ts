@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { rulesRoot } from "../../utils/ruleLoader";
 
 // === Types for the JSON Adapter Schema ===
 
@@ -17,10 +18,10 @@ interface AdapterPattern {
     beginsScope?: boolean;
     edgeType?: string;
     sourceIsFile?: boolean;
-    nameIsList?: boolean;       // e.g., `import os, sys` splits into multiple nodes
-    isGlobal?: boolean;         // e.g., call sites: run regex on full line not line-start
-    onlyInScope?: string[];     // e.g., METHOD only matches inside CLASS scope
-    promoteInScope?: Record<string, string>; // e.g., FUNCTION -> METHOD inside CLASS
+    nameIsList?: boolean;
+    isGlobal?: boolean;
+    onlyInScope?: string[];
+    promoteInScope?: Record<string, string>;
 }
 
 interface AdapterSpec {
@@ -34,16 +35,22 @@ interface AdapterSpec {
 interface StackFrame {
     id: string;
     type: string;
-    indent?: number;    // for python
-    braceLevel?: number; // for typescript
+    indent?: number;
+    braceLevel?: number;
 }
 
 // ==============================
 // Generic Regex Parsing Engine
 // ==============================
 
+// NOTE: node IDs use "::" instead of "#" as separator.
+// Cytoscape.js treats "#" as a CSS ID selector, which breaks compound parent lookups.
+function makeNodeId(filePath: string, suffix: string): string {
+    return `${filePath}::${suffix}`;
+}
+
 export function loadAdapterSpec(adapterName: string): AdapterSpec {
-    const adapterPath = path.join(process.cwd(), "rules", "adapters", `${adapterName}.json`);
+    const adapterPath = path.join(rulesRoot(), "adapters", `${adapterName}.json`);
     const raw = fs.readFileSync(adapterPath, "utf-8");
     return JSON.parse(raw) as AdapterSpec;
 }
@@ -62,63 +69,53 @@ export function runAdapter(filePath: string, rawCode: string, spec: AdapterSpec)
         compiledRegex: new RegExp(p.regex, p.isGlobal ? "g" : "")
     }));
 
-    // File anchor node
-    const fileNodeId = `${filePath}#FILE`;
+    // File anchor node — uses "::" separator to avoid Cytoscape CSS selector conflicts
+    const fileNodeId = makeNodeId(filePath, "FILE");
     nodes.push({ id: fileNodeId, type: "FILE", name: path.basename(filePath), fileUri: filePath });
 
     const stack: StackFrame[] = [{ id: fileNodeId, type: "FILE", indent: -1, braceLevel: 0 }];
-
-    let braceLevel = 0; // only meaningful for brace-tracking languages
+    let braceLevel = 0;
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
         const line = lines[lineIdx];
 
-        // Skip lines matching the skip line patterns (comment lines, blank lines, etc.)
         if (skipPatterns.some(re => re.test(line))) {
             if (spec.scopeTracking === "brace") {
-                const opens = (line.match(/\{/g) || []).length;
+                braceLevel += (line.match(/\{/g) || []).length;
                 const closes = (line.match(/\}/g) || []).length;
-                braceLevel += opens;
                 for (let b = 0; b < closes; b++) {
                     braceLevel--;
-                    if (stack.length > 1 && braceLevel < stack[stack.length - 1].braceLevel!) {
-                        stack.pop();
-                    }
+                    if (stack.length > 1 && braceLevel < stack[stack.length - 1].braceLevel!) stack.pop();
                 }
             }
             continue;
         }
 
-        // --- Indent Tracking (Python) ---
+        // Indent Tracking (Python)
         let indentLength = 0;
         if (spec.scopeTracking === "indent") {
             const rawIndent = line.match(/^(\s*)/)?.[1] || "";
             indentLength = rawIndent.replace(/\t/g, "    ").length;
-            // Pop stack frames that were at a deeper or equal indent 
-            while (stack.length > 1 && indentLength <= stack[stack.length - 1].indent!) {
-                stack.pop();
-            }
+            while (stack.length > 1 && indentLength <= stack[stack.length - 1].indent!) stack.pop();
         }
 
         const currentParent = stack[stack.length - 1];
-
         let matchedStructuralPattern = false;
 
-        // --- Run Each Structural Pattern (non-global) ---
+        // Run Each Structural Pattern (non-global)
         for (const pat of compiledPatterns) {
-            if (pat.isGlobal) continue; // Call sites are handled separately below
+            if (pat.isGlobal) continue;
 
             const m = line.match(pat.compiledRegex);
             if (!m) continue;
 
-            // Get name from capture group
             let rawName = pat.groups.name !== undefined ? m[pat.groups.name] : undefined;
             if (!rawName) continue;
 
             // onlyInScope check
             if (pat.onlyInScope && !pat.onlyInScope.includes(currentParent.type)) continue;
 
-            // Collect metadata from any group key starting with "meta_"
+            // Collect metadata
             const metadata: Record<string, string> = {};
             for (const [key, groupIdx] of Object.entries(pat.groups)) {
                 if (key.startsWith("meta_") && groupIdx !== undefined && m[groupIdx]) {
@@ -126,16 +123,17 @@ export function runAdapter(filePath: string, rawCode: string, spec: AdapterSpec)
                 }
             }
 
-            // Handle IMPORTS/EXTERNAL_NODE patterns (no scope push)
+            // IMPORTS → external node + edge, no scope push
             if (pat.edgeType === "IMPORTS") {
                 const libNames = pat.nameIsList
                     ? rawName.split(",").map((s: string) => s.trim().split(/\s+/)[0]).filter(Boolean)
                     : [rawName.trim()];
 
                 for (const lib of libNames) {
-                    const libId = `[EXTERNAL_NODE]::${lib}`;
+                    if (!lib) continue;
+                    const libId = `[EXT]::${lib}`;
                     if (!nodes.some(n => n.id === libId)) {
-                        nodes.push({ id: libId, type: pat.nodeType, name: lib, fileUri: libId });
+                        nodes.push({ id: libId, type: "EXTERNAL_NODE", name: lib, fileUri: libId });
                     }
                     const srcId = pat.sourceIsFile ? fileNodeId : currentParent.id;
                     if (!edges.some(e => e.sourceId === srcId && e.targetId === libId)) {
@@ -146,20 +144,20 @@ export function runAdapter(filePath: string, rawCode: string, spec: AdapterSpec)
                 break;
             }
 
-            // Resolve node type via promotion (e.g., FUNCTION -> METHOD inside CLASS)
+            // Resolve node type via promotion
             let nodeType = pat.nodeType;
             if (pat.promoteInScope?.[currentParent.type]) {
                 nodeType = pat.promoteInScope[currentParent.type];
             }
 
-            // Handle lists (e.g., import os, sys)
             const allNames = pat.nameIsList
                 ? rawName.split(",").map((s: string) => s.trim()).filter(Boolean)
                 : [rawName.trim()];
 
             for (const name of allNames) {
-                const nodeId = `${filePath}#${name}_${lineIdx}`;
+                const nodeId = makeNodeId(filePath, `${name}::L${lineIdx}`);
                 nodes.push({ id: nodeId, type: nodeType, name, fileUri: filePath, metadata });
+                // DEFINED_IN: child → parent (source=child, target=parent)
                 edges.push({ sourceId: nodeId, targetId: currentParent.id, type: "DEFINED_IN" });
 
                 if (pat.beginsScope) {
@@ -174,28 +172,25 @@ export function runAdapter(filePath: string, rawCode: string, spec: AdapterSpec)
             }
 
             matchedStructuralPattern = true;
-            break; // First matching pattern wins per line
+            break;
         }
 
-        // --- Brace Tracking Update (TypeScript) ---
+        // Brace Tracking Update (TypeScript)
         if (spec.scopeTracking === "brace") {
-            const opens = (line.match(/\{/g) || []).length;
+            braceLevel += (line.match(/\{/g) || []).length;
             const closes = (line.match(/\}/g) || []).length;
-            braceLevel += opens;
             for (let b = 0; b < closes; b++) {
                 braceLevel--;
-                if (stack.length > 1 && braceLevel < stack[stack.length - 1].braceLevel!) {
-                    stack.pop();
-                }
+                if (stack.length > 1 && braceLevel < stack[stack.length - 1].braceLevel!) stack.pop();
             }
         }
 
-        // --- Call Site Extraction (Global, only if no structural match) ---
+        // Call Site Extraction (Global, only if no structural match)
         if (!matchedStructuralPattern) {
             const callPat = compiledPatterns.find(p => p.isGlobal);
             if (callPat) {
-                let m: RegExpExecArray | null;
                 const globalRe = new RegExp(callPat.compiledRegex.source, "g");
+                let m: RegExpExecArray | null;
                 while ((m = globalRe.exec(line)) !== null) {
                     const word = callPat.groups.name !== undefined ? m[callPat.groups.name] : undefined;
                     if (!word || ignore.has(word) || word.length <= 2) continue;

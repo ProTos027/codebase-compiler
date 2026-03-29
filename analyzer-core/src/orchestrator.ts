@@ -1,6 +1,7 @@
 // used to control the flow of the analysis
 import { z } from "zod";
 import fs from "fs";
+import path from "path";
 import { loader } from "../utils/ruleLoader";
 import { resolveRole } from "./ruleResolver";
 import { FileNodeSchema } from "../schemas/fileStruct";
@@ -15,7 +16,7 @@ function getAdapterSpec(langKey: string) {
         try {
             adapterCache.set(langKey, loadAdapterSpec(langKey));
         } catch {
-            return null; // No adapter for this language yet
+            return null;
         }
     }
     return adapterCache.get(langKey)!;
@@ -41,7 +42,20 @@ export class Orchestrator {
         this.cur_state = 1;
 
         // Step 2: Classify files using rules (Extension -> Language -> Role -> Visibility)
+        // Also build a Set of .ts file basepaths to filter out compiled .js companions
+        const tsBasePaths = new Set(
+            file_paths
+                .filter(fp => fp.endsWith(".ts") || fp.endsWith(".tsx"))
+                .map(fp => fp.replace(/\.tsx?$/, ""))
+        );
+
         this.files = file_paths.map(fp => {
+            // Skip compiled .js/.js.map files when a .ts source twin exists
+            if ((fp.endsWith(".js") || fp.endsWith(".js.map") || fp.endsWith(".d.ts")) &&
+                tsBasePaths.has(fp.replace(/\.(js|js\.map|d\.ts)$/, ""))) {
+                return null;
+            }
+
             const ext = fp.split(".").pop() || "unknown";
             const language = this.getLanguageFromExtension(ext);
             const role = resolveRole(fp, language);
@@ -58,33 +72,61 @@ export class Orchestrator {
             }
 
             return { path: fp, language, role, include, visibility };
-        }).filter(f => f.include);
+        }).filter((f): f is NonNullable<typeof f> => f !== null && f.include);
 
         this.cur_state = 2;
 
         // Step 3: Dispatch to JSON-driven Language Adapters via the generic engine
-        for (const file of this.files) {
-            if (file.visibility === "blackbox" || file.visibility === "hidden") continue;
+        const seenNodeIds = new Set<string>();
 
-            const spec = getAdapterSpec(file.language);
-            if (!spec) {
-                // No adapter for this language yet — it still appears as a FILE node
-                this.graph.nodes.push({
-                    id: `${file.path}#FILE`,
-                    type: "FILE",
-                    name: file.path.split(/[\\/]/).pop() || file.path,
-                    fileUri: file.path
-                });
+        for (const file of this.files) {
+            if (file.visibility === "hidden") continue;
+
+            const fileNodeId = `${file.path}::FILE`;
+            const fileName = path.basename(file.path);
+
+            // Handle Blackbox files (Show the file node, but don't parse internal structure)
+            if (file.visibility === "blackbox") {
+                if (!seenNodeIds.has(fileNodeId)) {
+                    this.graph.nodes.push({ id: fileNodeId, type: "FILE", name: fileName, fileUri: file.path });
+                    seenNodeIds.add(fileNodeId);
+                }
                 continue;
             }
 
-            const rawCode = fs.readFileSync(file.path, "utf8");
-            const parsedData = runAdapter(file.path, rawCode, spec);
-            this.graph.nodes.push(...parsedData.nodes);
-            this.graph.edges.push(...parsedData.edges);
+            // Normal visibility: Try to parse using an adapter
+            const spec = getAdapterSpec(file.language);
+            if (!spec) {
+                if (!seenNodeIds.has(fileNodeId)) {
+                    this.graph.nodes.push({ id: fileNodeId, type: "FILE", name: fileName, fileUri: file.path });
+                    seenNodeIds.add(fileNodeId);
+                }
+                continue;
+            }
+
+            // Full parsing for normal structural files
+            try {
+                const rawCode = fs.readFileSync(file.path, "utf8");
+                const parsedData = runAdapter(file.path, rawCode, spec);
+
+                // Deduplicate nodes by ID
+                for (const node of parsedData.nodes) {
+                    if (!seenNodeIds.has(node.id)) {
+                        this.graph.nodes.push(node);
+                        seenNodeIds.add(node.id);
+                    }
+                }
+                this.graph.edges.push(...parsedData.edges);
+            } catch (err) {
+                console.warn(`Failed to parse ${file.path}:`, err);
+                if (!seenNodeIds.has(fileNodeId)) {
+                    this.graph.nodes.push({ id: fileNodeId, type: "FILE", name: fileName, fileUri: file.path });
+                    seenNodeIds.add(fileNodeId);
+                }
+            }
         }
 
-        // Step 4: Resolve Heuristic Cross-file Connections (Global name matching)
+        // Step 4: Resolve Heuristic Cross-file Connections
         this.resolveHeuristicEdges();
         this.cur_state = 3;
 
@@ -103,11 +145,9 @@ export class Orchestrator {
                 n.name === word && ["CLASS", "FUNCTION", "METHOD"].includes(n.type)
             );
 
-            if (match) {
-                return { ...edge, targetId: match.id, type: "CALLS" };
-            }
+            if (match) return { ...edge, targetId: match.id, type: "CALLS" };
 
-            const extId = `[EXTERNAL_NODE]::${word}`;
+            const extId = `[EXT]::${word}`;
             if (!this.graph.nodes.some((n: any) => n.id === extId)) {
                 this.graph.nodes.push({ id: extId, type: "EXTERNAL_NODE", name: word, fileUri: extId });
             }

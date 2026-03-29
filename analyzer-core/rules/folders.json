@@ -2,10 +2,21 @@
   ".git",
   "node_modules",
   "venv",
+  "env",
+  ".env",
   "__pycache__",
   "dist",
   "build",
-  ".vscode",
+  "out",
+  ".vscode-test",
   ".idea",
-  "target"
+  "target",
+  ".mypy_cache",
+  ".pytest_cache",
+  "site-packages",
+  "lib",
+  "include",
+  "bin",
+  "Scripts",
+  "rules"
 ]

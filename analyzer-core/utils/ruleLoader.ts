@@ -8,8 +8,7 @@ export let folders: any;
 // Allow external callers (e.g., VS Code extension via extensionPath) to override the rules root
 let _rulesRoot: string | null = null;
 export function setRulesRoot(dir: string) { _rulesRoot = dir; }
-
-function rulesRoot(): string {
+export function rulesRoot(): string {
     return _rulesRoot ?? path.join(process.cwd(), "rules");
 }
 
