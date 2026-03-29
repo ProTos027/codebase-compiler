@@ -1,0 +1,33 @@
+{
+  "ext": {
+    "py": "source",
+    "js": "source",
+    "ts": "source",
+    "tsx": "source",
+    "html": "asset",
+    "css": "asset",
+    "md": "unknown",
+    "txt": "unknown",
+    "json": "config",
+    "yml": "config",
+    "yaml": "config",
+    "sh": "script",
+    "bat": "script",
+    "ps1": "script",
+    "exe": "binary",
+    "dll": "binary",
+    "so": "binary",
+    "pyc": "binary",
+    "db": "binary"
+  },
+  "names": {
+    "package.json": "config",
+    "tsconfig.json": "config",
+    "manage.py": "script",
+    ".gitignore": "config",
+    ".env": "config",
+    "Dockerfile": "build",
+    "docker-compose.yml": "build",
+    "requirements.txt": "build"
+  }
+}

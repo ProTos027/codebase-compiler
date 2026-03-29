@@ -1,0 +1,10 @@
+{
+  "python": {
+    "ext": { "py": "source" },
+    "names": { "__init__.py": "source", "conftest.py": "test" }
+  },
+  "typescript": {
+    "ext": { "ts": "source", "tsx": "source" },
+    "names": { "jest.config.ts": "config" }
+  }
+}

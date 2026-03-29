@@ -1,0 +1,81 @@
+{
+  "language": "python",
+  "scopeTracking": "indent",
+  "patterns": [
+    {
+      "id": "class",
+      "nodeType": "CLASS",
+      "regex": "^(\\s*)class\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?:\\((.*?)\\))?\\s*:",
+      "groups": {
+        "indent": 1,
+        "name": 2,
+        "meta_extends": 3
+      },
+      "beginsScope": true
+    },
+    {
+      "id": "function",
+      "nodeType": "FUNCTION",
+      "regex": "^(\\s*)(?:async\\s+)?def\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\((.*?)\\)(?:\\s*->\\s*(.*?))?\\s*:",
+      "groups": {
+        "indent": 1,
+        "name": 2,
+        "meta_params": 3,
+        "meta_returnType": 4
+      },
+      "beginsScope": true,
+      "promoteInScope": {
+        "CLASS": "METHOD"
+      }
+    },
+    {
+      "id": "controlflow",
+      "nodeType": "CONTROL_FLOW",
+      "regex": "^(\\s*)(if|for|while|try|with|except|finally|elif|else)\\b",
+      "groups": {
+        "indent": 1,
+        "name": 2
+      },
+      "beginsScope": true
+    },
+    {
+      "id": "from_import",
+      "nodeType": "EXTERNAL_NODE",
+      "regex": "^(\\s*)from\\s+([a-zA-Z0-9_.]+)\\s+import\\s+([a-zA-Z0-9_.,\\s*]+)",
+      "groups": {
+        "name": 2
+      },
+      "edgeType": "IMPORTS",
+      "sourceIsFile": true
+    },
+    {
+      "id": "import",
+      "nodeType": "EXTERNAL_NODE",
+      "regex": "^(\\s*)import\\s+([a-zA-Z0-9_.,\\s]+)",
+      "groups": {
+        "name": 2
+      },
+      "edgeType": "IMPORTS",
+      "sourceIsFile": true,
+      "nameIsList": true
+    },
+    {
+      "id": "call",
+      "nodeType": "CALL_SITE",
+      "regex": "\\b([a-zA-Z_$][a-zA-Z0-9_$]*)\\s*(?=\\()",
+      "groups": {
+        "name": 1
+      },
+      "edgeType": "CALLS",
+      "isGlobal": true
+    }
+  ],
+  "ignoreWords": [
+    "if", "for", "while", "return", "elif", "print", "super", "range", "len",
+    "dict", "str", "int", "float", "list", "set", "map", "filter", "zip",
+    "enumerate", "isinstance", "issubclass", "hasattr", "getattr", "setattr",
+    "delattr", "property", "classmethod", "staticmethod", "def", "class",
+    "lambda", "pass", "raise", "except", "finally", "with", "yield", "async"
+  ],
+  "skipLinePatterns": ["^\\s*#", "^\\s*$"]
+}
