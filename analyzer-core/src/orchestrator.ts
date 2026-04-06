@@ -63,7 +63,7 @@ export class Orchestrator {
             let include = true;
             let visibility: "normal" | "hidden" | "external" | "blackbox" = "normal" as any;
 
-            if (["binary", "asset", "unknown", "generated"].includes(role)) {
+            if (["binary", "asset", "unknown", "generated", "config", "build"].includes(role)) {
                 include = false;
                 visibility = "hidden" as any;
             } else if (role === "vendor") {
@@ -126,8 +126,14 @@ export class Orchestrator {
             }
         }
 
-        // Step 4: Resolve Heuristic Cross-file Connections
+        // Step 4: Resolve cross-file connections
         this.resolveHeuristicEdges();
+        // Step 5: Wire [LOCAL]:: imports to actual file nodes
+        this.resolveLocalImports();
+        // Step 6: Prune noisy error/exception branches
+        this.pruneErrorBranches();
+        // Step 7: Dropping isolated nodes has been disabled so dead code and unused files remain visible.
+        // this.removeIsolatedNodes();
         this.cur_state = 3;
 
         console.log(
@@ -137,22 +143,135 @@ export class Orchestrator {
     }
 
     private resolveHeuristicEdges() {
-        this.graph.edges = this.graph.edges.map((edge: any) => {
-            if (!edge.targetId.startsWith("[CALL_HEURISTIC]::")) return edge;
+        const fileNodeCache = new Map<string, string>();
+        for (const e of this.graph.edges) {
+            if (e.type === 'DEFINED_IN' && !fileNodeCache.has(e.sourceId)) {
+                const parentNode = this.graph.nodes.find((n: any) => n.id === e.targetId);
+                if (parentNode?.fileUri) fileNodeCache.set(e.sourceId, parentNode.fileUri);
+            }
+        }
 
-            const word = edge.targetId.split("::")[1];
-            const match = this.graph.nodes.find((n: any) =>
-                n.name === word && ["CLASS", "FUNCTION", "METHOD"].includes(n.type)
+        this.graph.edges = this.graph.edges.map((edge: any) => {
+            if (!edge.targetId.startsWith("[CALL_HEURISTIC]::") && !edge.targetId.startsWith("[INHERIT_HEURISTIC]::")) return edge;
+
+            const isInherit = edge.targetId.startsWith("[INHERIT_HEURISTIC]::");
+            const word = edge.targetId.replace(/^\[(?:CALL|INHERIT)_HEURISTIC\]::/, "");
+            const edgeType = isInherit ? "INHERITS" : "CALLS";
+            const allowedTypes = isInherit ? ["CLASS", "INTERFACE"] : ["CLASS", "INTERFACE", "ENUM", "FUNCTION", "METHOD"];
+
+            const sourceFile = fileNodeCache.get(edge.sourceId) || this.graph.nodes.find((n:any)=>n.id===edge.sourceId)?.fileUri;
+            
+            // 1. Local Same-File Match
+            let match = this.graph.nodes.find((n: any) => 
+                n.name === word && allowedTypes.includes(n.type) && n.fileUri === sourceFile && n.id !== edge.sourceId
             );
 
-            if (match) return { ...edge, targetId: match.id, type: "CALLS" };
+            // 2. Global Match
+            if (!match) {
+                match = this.graph.nodes.find((n: any) =>
+                    n.name === word && allowedTypes.includes(n.type) && n.id !== edge.sourceId
+                );
+            }
 
+            if (match) return { ...edge, targetId: match.id, type: edgeType };
+
+            // 3. Fallback External Node
             const extId = `[EXT]::${word}`;
             if (!this.graph.nodes.some((n: any) => n.id === extId)) {
                 this.graph.nodes.push({ id: extId, type: "EXTERNAL_NODE", name: word, fileUri: extId });
             }
-            return { ...edge, targetId: extId, type: "CALLS" };
+            return { ...edge, targetId: extId, type: edgeType };
         });
+    }
+
+    /**
+     * Resolves [LOCAL]::./relative/path imports to the actual file node they reference.
+     * If a match is found, the edge is rewired and the ghost [LOCAL]:: placeholder is removed.
+     */
+    private resolveLocalImports() {
+        // Build lookup: normalized absolute path (no extension) → file node ID
+        const fileNodeByPath = new Map<string, string>();
+        for (const node of this.graph.nodes) {
+            if (node.type === 'FILE' && node.fileUri) {
+                const withoutExt = node.fileUri.replace(/\.[^.]+$/, '').toLowerCase().replace(/\\/g, '/');
+                fileNodeByPath.set(withoutExt, node.id);
+                fileNodeByPath.set(node.fileUri.toLowerCase().replace(/\\/g, '/'), node.id);
+            }
+        }
+
+        const resolvedLocalIds = new Set<string>();
+
+        for (const edge of this.graph.edges) {
+            if (edge.type !== 'LOCAL_IMPORT') continue;
+            if (!edge.targetId.startsWith('[LOCAL]::')) continue;
+
+            const importPath = edge.targetId.replace('[LOCAL]::', '');
+
+            // Determine the source file's directory from the source node's fileUri
+            const sourceNode = this.graph.nodes.find((n: any) => n.id === edge.sourceId);
+            const sourceFile = sourceNode?.fileUri;
+            if (!sourceFile || !path.isAbsolute(sourceFile)) continue;
+
+            const sourceDir = path.dirname(sourceFile);
+
+            // Try to resolve: join directory + relative import, try common extensions
+            const candidates = ['', '.ts', '.tsx', '.js', '.jsx', '.py', '/index.ts', '/index.js'];
+            for (const ext of candidates) {
+                const raw = path.join(sourceDir, importPath + ext);
+                const normalized = raw.toLowerCase().replace(/\\/g, '/');
+                if (fileNodeByPath.has(normalized)) {
+                    resolvedLocalIds.add(edge.targetId);
+                    edge.targetId = fileNodeByPath.get(normalized)!;
+                    break;
+                }
+            }
+        }
+
+        // Remove ghost [LOCAL]:: placeholder nodes that were resolved to real file nodes
+        this.graph.nodes = this.graph.nodes.filter((n: any) => !resolvedLocalIds.has(n.id));
+    }
+
+    /**
+     * Drops isolated FILE nodes that have no edges — these are config/asset files
+     * with no structural relationship to the codebase (e.g. package-lock.json).
+     */
+    private removeIsolatedNodes() {
+        const connectedIds = new Set<string>();
+        for (const edge of this.graph.edges) {
+            connectedIds.add(edge.sourceId);
+            connectedIds.add(edge.targetId);
+        }
+        this.graph.nodes = this.graph.nodes.filter((n: any) => {
+            if (n.type === 'FILE' && !connectedIds.has(n.id)) return false; // Drop isolated config/asset files
+            return true; // structural nodes always kept
+        });
+    }
+
+    /**
+     * Drops completely noisy branches that end in common error types.
+     * Removes EXTERNAL_NODEs that look like error classes/exceptions and any edges pointing to them.
+     */
+    private pruneErrorBranches() {
+        // Matches anything ending with Error/Exception, or exactly "reject" (case-insensitive)
+        const errorLikePattern = /(?:Error|Exception)$|^reject$/i;
+        
+        const errorNodeIds = new Set<string>();
+        
+        // Find external nodes that match error patterns
+        this.graph.nodes = this.graph.nodes.filter((n: any) => {
+            if (n.type === 'EXTERNAL_NODE' && errorLikePattern.test(n.name)) {
+                errorNodeIds.add(n.id);
+                return false; // drop node
+            }
+            return true;
+        });
+        
+        // Remove edges connected to dropped nodes
+        if (errorNodeIds.size > 0) {
+           this.graph.edges = this.graph.edges.filter((e: any) => 
+               !errorNodeIds.has(e.sourceId) && !errorNodeIds.has(e.targetId)
+           );
+        }
     }
 
     private getLanguageFromExtension(ext: string): string {
