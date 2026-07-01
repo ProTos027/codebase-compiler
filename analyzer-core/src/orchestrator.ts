@@ -22,22 +22,49 @@ function getAdapterSpec(langKey: string) {
     return adapterCache.get(langKey)!;
 }
 
+export type DetectedFramework = 'django' | 'unknown';
+
 export class Orchestrator {
     root: string;
     cur_state: number;
     files: z.infer<typeof FileNodeSchema>[];
     graph: any;
+    framework: DetectedFramework;
 
     constructor(root: string) {
         this.root = root;
         this.cur_state = 0;
         this.files = [];
         this.graph = { nodes: [], edges: [] };
+        this.framework = 'unknown';
+    }
+
+    /**
+     * Lightweight pre-graph framework detection using only the filesystem.
+     * Runs before file classification so the correct language key is used for
+     * role resolution — e.g. 'django' instead of 'python' for Django projects.
+     */
+    private detectFramework(): DetectedFramework {
+        const reqPath = path.join(this.root, 'requirements.txt');
+        if (fs.existsSync(reqPath)) {
+            const reqs = fs.readFileSync(reqPath, 'utf8').toLowerCase();
+            if (reqs.includes('django')) return 'django';
+        }
+        const managePath = path.join(this.root, 'manage.py');
+        if (fs.existsSync(managePath)) {
+            const content = fs.readFileSync(managePath, 'utf8').toLowerCase();
+            if (content.includes('django')) return 'django';
+        }
+        return 'unknown';
     }
 
     async analyze() {
-        // Step 1: Initialize rules and get raw file structure
+        // Step 1: Initialize rules, detect framework, and get raw file structure
         loader();
+        this.framework = this.detectFramework();
+        if (this.framework !== 'unknown') {
+            console.log(`[Orchestrator] Detected framework: ${this.framework}`);
+        }
         const file_paths = getFileStructure(this.root);
         this.cur_state = 1;
 
@@ -206,24 +233,36 @@ export class Orchestrator {
             if (!edge.targetId.startsWith('[LOCAL]::')) continue;
 
             const importPath = edge.targetId.replace('[LOCAL]::', '');
+            // Normalize dots to slashes for Python/Java style imports
+            const normalizedImport = importPath.replace(/\./g, '/');
 
             // Determine the source file's directory from the source node's fileUri
             const sourceNode = this.graph.nodes.find((n: any) => n.id === edge.sourceId);
             const sourceFile = sourceNode?.fileUri;
-            if (!sourceFile || !path.isAbsolute(sourceFile)) continue;
+            if (!sourceFile) continue;
 
             const sourceDir = path.dirname(sourceFile);
 
-            // Try to resolve: join directory + relative import, try common extensions
-            const candidates = ['', '.ts', '.tsx', '.js', '.jsx', '.py', '/index.ts', '/index.js'];
-            for (const ext of candidates) {
-                const raw = path.join(sourceDir, importPath + ext);
-                const normalized = raw.toLowerCase().replace(/\\/g, '/');
-                if (fileNodeByPath.has(normalized)) {
-                    resolvedLocalIds.add(edge.targetId);
-                    edge.targetId = fileNodeByPath.get(normalized)!;
-                    break;
+            // Candidates:
+            // 1. Relative to current file's directory
+            // 2. Relative to workspace root (for absolute-style package imports)
+            const baseDirCandidates = [sourceDir, this.root];
+            const extCandidates = ['', '.ts', '.tsx', '.js', '.jsx', '.py', '/index.ts', '/index.js', '/__init__.py'];
+
+            let resolved = false;
+            for (const base of baseDirCandidates) {
+                if (!base) continue;
+                for (const ext of extCandidates) {
+                    const raw = path.join(base, normalizedImport + ext);
+                    const normalized = raw.toLowerCase().replace(/\\/g, '/');
+                    if (fileNodeByPath.has(normalized)) {
+                        resolvedLocalIds.add(edge.targetId);
+                        edge.targetId = fileNodeByPath.get(normalized)!;
+                        resolved = true;
+                        break;
+                    }
                 }
+                if (resolved) break;
             }
         }
 
@@ -276,7 +315,7 @@ export class Orchestrator {
 
     private getLanguageFromExtension(ext: string): string {
         switch (ext) {
-            case "py":  return "python";
+            case "py":  return this.framework === 'django' ? 'django' : 'python';
             case "js":
             case "jsx": return "javascript";
             case "ts":

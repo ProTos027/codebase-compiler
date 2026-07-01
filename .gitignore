@@ -1,5 +1,45 @@
-out
-dist
-node_modules
-.vscode-test/
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+
+# TypeScript compilation cache
+*.tsbuildinfo
+
+# VS Code extension artifacts
 *.vsix
+.vscode-test/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Graph debug dumps (large, auto-generated)
+raw_graph_output.json
+analyzer-extension/raw_graph_output.json
+
+# Temp / scratch files
+tmp_*.js
+tmp_*.ts
+test_output.txt
+analyzer-core/test_output.txt
+analyzer-core/echo.ts
+analyzer-core/test.js
+analyzer-core/test.ts
+
+# Neo4j local data
+graph/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE artifacts (keep .vscode settings but not personal/generated state)
+.vscode/settings.json

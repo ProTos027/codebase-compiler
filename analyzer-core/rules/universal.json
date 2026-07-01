@@ -28,6 +28,18 @@
     ".env": "config",
     "Dockerfile": "build",
     "docker-compose.yml": "build",
-    "requirements.txt": "build"
+    "requirements.txt": "build",
+    "wsgi.py": "script",
+    "asgi.py": "script",
+    "settings.py": "config",
+    "apps.py": "config",
+    "setup.py": "build",
+    "setup.cfg": "config",
+    "pyproject.toml": "config",
+    "tox.ini": "config",
+    ".flake8": "config",
+    ".pylintrc": "config",
+    "Pipfile": "build",
+    "Pipfile.lock": "build"
   }
 }

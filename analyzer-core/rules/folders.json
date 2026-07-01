@@ -18,5 +18,13 @@
   "include",
   "bin",
   "Scripts",
-  "rules"
+  "rules",
+  "migrations",
+  "staticfiles",
+  "collected_static",
+  "mediafiles",
+  "media",
+  ".tox",
+  "htmlcov",
+  ".coverage"
 ]

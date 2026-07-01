@@ -1,7 +1,50 @@
 {
   "python": {
     "ext": { "py": "source" },
-    "names": { "__init__.py": "source", "conftest.py": "test" }
+    "names": {
+      "__init__.py": "source",
+      "conftest.py": "test"
+    }
+  },
+  "django": {
+    "ext": { "py": "source" },
+    "names": {
+      "__init__.py": "source",
+
+      "models.py": "source",
+      "views.py": "source",
+      "urls.py": "source",
+      "serializers.py": "source",
+      "signals.py": "source",
+      "admin.py": "source",
+      "forms.py": "source",
+      "managers.py": "source",
+      "middleware.py": "source",
+      "permissions.py": "source",
+      "validators.py": "source",
+      "filters.py": "source",
+      "throttling.py": "source",
+      "pagination.py": "source",
+      "renderers.py": "source",
+      "exceptions.py": "source",
+      "utils.py": "source",
+      "helpers.py": "source",
+      "mixins.py": "source",
+      "tasks.py": "source",
+
+      "tests.py": "test",
+      "test_models.py": "test",
+      "test_views.py": "test",
+      "test_serializers.py": "test",
+      "test_urls.py": "test",
+      "conftest.py": "test",
+
+      "apps.py": "config",
+      "settings.py": "config",
+      "wsgi.py": "script",
+      "asgi.py": "script",
+      "manage.py": "script"
+    }
   },
   "typescript": {
     "ext": { "ts": "source", "tsx": "source" },
